@@ -1,0 +1,309 @@
+---
+title: "xenotail1Figures"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+This code accompanies the paper "Identification of a regeneration organizing cell in the Xenopus tail, Aztekin, Hiscock et al. 2019". 
+
+```{r, include =FALSE}
+source("scripts.R")
+```
+
+## Load data and preliminary visualizations
+
+```{r}
+counts <- readMM("countsMatrix.mtx")
+genes <- read.csv("genes.csv", header = F)$V1
+cells<- read.csv("cells.csv", header = F)$V1
+rownames(counts) <- genes
+colnames(counts) <- cells
+meta <- as.data.frame(read.csv("meta.csv"))
+labels <- as.data.frame(read.csv("labels.csv"))
+clusters <- read.table(file = "clusters.csv", sep = ",", header = T)
+```
+
+
+We then normalize the counts by library size, and plot UMIs (log10) across our entire dataset.
+
+```{r}
+meta$umi <- Matrix::colSums(counts)
+countn <- normalize(counts)
+plotUMI(meta)
+
+```
+
+We plot the cell type annotations.
+
+```{r}
+plotAnnotation(meta,clusters)
+```
+
+## Visualizing contributions of different conditions
+
+Above, we plotted every cell from our dataset to create a reference projection. Now, we highlight cells from different biological conditions on this reference.
+
+```{r}
+condition <- paste0(meta$DevelopmentalStage,"_", meta$DaysPostAmputation, "dpa")
+
+
+for (sample in sort(unique(condition))){
+  plotSample(which(condition == sample), title = sample, mode = "none")
+}
+
+```
+
+
+We repeat this, but now retaining batch information.
+
+
+```{r}
+
+for (sample in sort(unique(condition))){
+  plotSample(which(condition == sample), title = sample, mode = "batch")
+}
+```
+
+## Gene expression visualization
+
+We plot gene expression (log10 normalized counts).
+
+```{r}
+plotGene(meta, countn,"lef1.S")
+plotGene(meta, countn,"lef1.L")
+plotGene(meta, countn,"tp63.S")
+plotGene(meta, countn,"tp63.S")
+plotGene(meta, countn,"krt.L")
+plotGene(meta, countn,"hes1.L")
+plotGene(meta, countn,"neurod4.L")
+plotGene(meta, countn,"tubb3.L")
+
+```
+
+We also plot gene expression (log10 normalized counts) for different conditions.
+
+```{r}
+
+for (sample in sort(unique(condition))){
+  plotGeneSubset(meta,countn,"lef1.L", which(condition == sample),title = sample)
+}
+
+
+```
+
+## scGSEA analysis
+
+Construct gene expression rankings, on the entire gene list,using AUCell. Note, genes with the same expression level are randomly shuffled; different seeds can be chosen to assess the impact of this shuffling on the results. Here we set the seed to an arbitrary value. 
+
+```{r}
+set.seed(42)
+rankings <- AUCell_buildRankings(countn, nCores=2, plotStats=F)
+```
+
+
+Read in predefined gene sets.
+
+```{r}
+geneSets <- as.list(read.table("genesets.csv", header = T, sep = ",", na.strings = ""))
+geneSets <- (lapply(geneSets, na.omit))
+cbind(lengths(geneSets))
+```
+
+Construct scGSEA scores using AUCell.
+
+```{r}
+scores <- getAUC(AUCell_calcAUC(geneSets, rankings))
+```
+
+Plot scGSEA scores for each cell type
+```{r}
+
+for (geneset in rownames(scores)){
+  scBox(scores[geneset,],meta$cluster, clusters, title = geneset)
+  ggsave(paste0(geneset,"_bar.tiff"), plot = last_plot(), device = "tiff", scale = 1, width = 8, height = 5, units = "in", dpi = 1000)
+}
+
+```
+
+Plot scGSEA scores for a subset of cell types
+
+```{r}
+subset <- c(1,2,3,22:30,46,35:45)
+m <- which(meta$cluster %in% clusters$names[subset])
+scBox(scores["FGF_ligands",m],meta$cluster[m], clusters[subset,], title = "FGF Ligands")
+ggsave(paste0("fgfs_truncated_bar.tiff"), plot = last_plot(), device = "tiff", scale = 1, width = 8, height = 5, units = "in", dpi = 1000)
+ggsave(paste0("FGF_ligands_truncated_bar.pdf"), plot = last_plot(), device = "pdf", scale = 1, width = 8, height = 5)
+scBox(scores["FGF_receptors",m],meta$cluster[m], clusters[subset,], title = "FGF Receptors")
+ggsave(paste0("fgfrs_truncated_bar.tiff"), plot = last_plot(), device = "tiff", scale = 1, width = 8, height = 5, units = "in", dpi = 1000)
+ggsave(paste0("FGF_receptors_truncated_bar.pdf"), plot = last_plot(), device = "pdf", scale = 1, width = 8, height = 5)
+```
+
+
+## Cell cycle analysis
+
+Inferred cell cycle phase is computed using Seurat::CellCycleScoring, with the gene list contained in cellCycleOrthologs.txt [genes 1:42 are s.genes, and 43:91 are g2m.genes). Note there is a slight discrepancy to the  cell cycle annotations provided in the array express download (< 0.5% cells); this is due to small differences in the numbers of genes considered.
+
+```{r}
+cc.genes <- read.csv('cellCycleOrthologs.txt',header=FALSE,sep='\t')
+cc.genes1<-sapply(tolower((cc.genes$V1)),function(x) paste0(x,".L"))
+cc.genes2<-sapply(tolower(cc.genes$V1),function(x) paste0(x,".S"))
+s.genes1 <- cc.genes1[1:42]
+g2m.genes1 <- cc.genes1[43:91]
+s.genes2 <- cc.genes2[1:42]
+g2m.genes2 <- cc.genes2[43:91]
+s.genes = c(s.genes1,s.genes2)
+g2m.genes = c(g2m.genes1,g2m.genes2)
+
+seuratHVG <- CreateSeuratObject(raw.data = countn)
+
+seuratHVG <- CellCycleScoring(object = seuratHVG, s.genes = s.genes, g2m.genes = g2m.genes,
+    set.ident = TRUE)
+
+meta$CellCyclePhase <- seuratHVG@meta.data[,6]
+table(meta$CellCyclePhase)
+```
+
+
+```{r}
+condition <- paste0(meta$DevelopmentalStage,"_", meta$DaysPostAmputation, "dpa")
+pdf("cc_all.pdf", width=8,height=5)
+plotCellCycle(meta,clusters, "all data")
+dev.off()
+
+pdf("cc_st40_0.pdf", width=8,height=5)
+plotCellCycle(meta[which(condition == "st40_0dpa"),],clusters, "ST40_0")
+dev.off()
+
+pdf("cc_st46_0.pdf", width=8,height=5)
+plotCellCycle(meta[which(condition == "st46_0dpa"),],clusters, "ST46_0")
+dev.off()
+
+```
+
+Compare fraction of cycling cells during regeneration. Regenerating tails (ST40, 2dpa) were compared to intact tails (ST46, 0dpa); these timepoints are chosen so that each sample is at the same developmental stage (5dpf). It is known, and observed in our data, that proliferation rates vary significantly over developmental time independent of amputation.
+
+```{r}
+p1 <- getCycling(meta[which(condition == "st40_2dpa"),],clusters)
+p2 <- getCycling(meta[which(condition == "st46_0dpa"),],clusters)
+diff <- p1 - p2
+pdf("foldChange.pdf", width=8,height=5)
+par(mfrow=c(1, 1), mar=c(10, 5, 4, 8)); barplot(diff[subset],las=2,legend.text = FALSE,args.legend = list(x = "topright", bty = "n", inset=c(-0.15, 0)), cex.names = 0.65, col = sapply(clusters$cols[subset], as.character), ylim = c(0.0,0.5), ylab="change in fraction of proliferating cells")
+dev.off()
+
+
+```
+
+## Heatmap of marker genes
+
+For selected sets of genes and/or cell types, we compute average gene expression (log10 normalized counts) for each cell type. Intensity values are normalized such that the cell type with maximal expression has unit value.
+
+```{r, warning=FALSE}
+
+
+skin <- clusters[1:10,]
+skinGenes <- as.vector(read.csv("skinGenes.csv", header = F)$V1)
+M <- heatmap_xenify(countn,skinGenes,cells = which(meta$cluster %in% skin$names), condition = meta$cluster, clusters = clusters)
+
+blood <- clusters[11:21,]
+bloodGenes <- as.vector(read.csv("bloodGenes.csv", header = F)$V1)
+M <- heatmap_xenify(countn,bloodGenes,cells = which(meta$cluster %in% blood$names), condition = meta$cluster, clusters = clusters)
+
+muscle <- clusters[22:34,]
+muscleGenes <- as.vector(read.csv("muscleGenes.csv", header = F)$V1)
+M <- heatmap_xenify(countn,muscleGenes,cells = which(meta$cluster %in% muscle$names), condition = meta$cluster, clusters = clusters)
+
+neural <- clusters[35:46,]
+neuralGenes <- as.vector(read.csv("neuralGenes.csv", header = F)$V1)
+M <- heatmap_xenify(countn,neuralGenes,cells = which(meta$cluster %in% neural$names), condition = meta$cluster, clusters = clusters)
+
+M <- heatmap_xenify(countn,genes = c(skinGenes,bloodGenes,muscleGenes,neuralGenes), condition = meta$cluster, clusters = clusters,aspect.ratio = 2, xSize = 2.5, ySize = 2.5, xAngle = 90, yAngle = 0)
+
+skin <- clusters[1:10,]
+keratinGenes <- as.vector(read.csv("keratinGenes.csv", header = F)$V1)
+M <- heatmap(countn,genes = keratinGenes,cells = which(meta$cluster %in% skin$names),condition = meta$cluster, conditionList = skin$names, norm = "max", aspect.ratio = 2.5, xSize = 7.5, ySize = 7.5)
+
+rocGenes <- as.vector(read.csv("rocGenes.csv", header = F)$V1)
+M <- heatmap_xenify(countn,rocGenes, condition = meta$cluster, clusters = clusters, xAngle = 90, aspect.ratio = 0.5)
+
+
+
+
+
+```
+
+We plot the average expression of krt.L (log10 normalized counts) across biological conditions, for selected cell types, 
+
+```{r}
+rocs <- which(meta$cluster == "ROCs")
+goblet <- which(meta$cluster == "Goblet cell")
+epidermis <- which(meta$cluster == "Epidermis")
+krt <- log10(countn[which(rownames(countn) == "krt.L"),]+1)
+condition <- paste0(meta$DevelopmentalStage,"_", meta$DaysPostAmputation, "dpa")
+
+krtGOB <- aggregate(krt[goblet],list(condition[goblet]),mean)$x
+krtROCs <- aggregate(krt[rocs],list(condition[rocs]),mean)$x
+krtEPI <- aggregate(krt[epidermis],list(condition[epidermis]),mean)$x
+
+dat <- cbind(krtGOB,krtROCs, krtEPI)
+colnames(dat) <- clusters$names[1:3]
+rownames(dat) <- sort(unique(condition))
+
+
+melted <- melt((dat))
+
+
+ggplot(data = melted, mapping = aes(x=Var1, y=Var2, fill=value)) +
+    theme_bw() +
+    geom_tile() +
+    scale_fill_gradient(low = "white",high = "steelblue") +
+    theme(axis.text.x = element_text(angle = 45, hjust = 1, size = 12), axis.text.y = element_text(angle = 0, size = 10), aspect.ratio = 0.5, axis.title.x = element_blank(), axis.title.y = element_blank()) +
+    theme(axis.title = element_blank(),  axis.ticks = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+```
+
+
+## Differential abundance statistics
+First, we plot the cell type abundances (log10 fraction of all cells) for each biological replicate.
+
+```{r}
+
+abundances <- t(table(meta$cluster, meta$sample))
+fraction <- (abundances / rowSums(abundances))
+
+
+log10fraction <- log10(t(fraction))
+
+m1 <- match(clusters$names,rownames(log10fraction))
+m2 <- c("SIGAA8","SIGAA5","SIGAG10","SIGAD12","SIGAA10","SIGAB8","SIGAE12","SIGAB5","SIGAC12","SIGAB10","SIGAC8","SIGAA11","SIGAF12", "SIGAC10")
+m2 <- match(m2,colnames(log10fraction))
+
+log10fraction <- log10fraction[m1,m2]
+melted <- melt((log10fraction))
+
+melted$value[is.infinite(melted$value)] <- min(melted$value[which(!is.infinite(melted$value))])
+
+ggplot(data = melted, mapping = aes(x=Var1, y=Var2, fill=value)) +
+    theme_bw() +
+geom_tile(aes(fill = value), colour = "white") + scale_fill_gradient(low = "white",high = "steelblue")+
+    theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 6), axis.text.y = element_text(angle = 0, size = 8), aspect.ratio = 0.5, axis.title.x = element_blank(), axis.title.y = element_blank()) +
+    theme(axis.title = element_blank(),  axis.ticks = element_blank(), panel.grid.major = element_blank(), panel.grid.minor = element_blank())
+
+
+
+```
+
+Next, we peform differential abundance analysis. We remove red blood cells which are observed in experiment to have variable capture efficiencies. We only consider cell types with a mean abundance per sample above 5, as suggested in https://bioconductor.org/packages/release/bioc/vignettes/cydar/inst/doc/cydar.html. 
+
+```{r}
+meta_remove_blood <- meta[-which(meta$cluster %in% clusters$names[c(18:21)]),]
+da <- differentialAbundance(meta_remove_blood,labels,sample1 = "ST40_1",sample2 = "ST46_1", minN = 5, pthresh = 0.3, clusters = clusters)
+```
+
+## Package information
+
+
+```{r}
+sessionInfo()
+```

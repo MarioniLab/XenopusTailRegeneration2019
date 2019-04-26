@@ -1,0 +1,59 @@
+---
+title: "projectAndCluster"
+output:
+  html_document:
+    df_print: paged
+  html_notebook: default
+  pdf_document: default
+---
+
+```{r, include =FALSE}
+source("scripts.R")
+```
+
+## Load data 
+
+```{r}
+counts <- readMM("countsMatrix.mtx")
+genes <- read.csv("genes.csv", header = F)$V1
+cells<- read.csv("cells.csv", header = F)$V1
+rownames(counts) <- genes
+colnames(counts) <- cells
+meta <- as.data.frame(read.csv("meta.csv"))
+labels <- as.data.frame(read.csv("labels.csv"))
+```
+
+## Normalize and select HVGs
+
+We then normalize the data by library size, and select HVGs for projection and clustering based on mean expresion, and fano factor.
+
+```{r}
+meta$umi <- Matrix::colSums(counts)
+countn <- normalize(counts)
+hvg <- compute_hvg(countn, fano = 0.65)
+```
+
+## Projection
+
+We then project the data to two dimensions using UMAP. (Note, slightly different projections will be generated based on the choice of seed.)
+
+```{r}
+meta <- umap_project(meta,hvg, neighbours = 20, dist = 0.5, seed = 12)
+plotMeta(meta)
+```
+
+
+## Clustering
+
+We then cluster the data by combining the walktrap graphical clustering algorithm with the fuzzy simplicial set from UMAP. (Note, changing the versions of the python modules, e.g. umap, can alter the resolution of the clustering. See the environment.yaml file for the versions used when creating this notebook.)
+
+```{r}
+meta <- umap_cluster(meta,hvg, neighbours = 10, steps = 10, seed1 = 3, seed2 = 8)
+plotMeta(meta, mode = "cluster")
+```
+
+
+
+```{r}
+sessionInfo()
+```
